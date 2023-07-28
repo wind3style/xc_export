@@ -4,36 +4,53 @@ import re
 import json
 import sys
 import os.path
+import pandas as pd
+import configparser
+import time
+
+class CONFIG_EXCEPTION(Exception):
+    pass
 
 class Config:
     def __init__(self):
-        self.src = 'world/2023'
-        self.date=  '2023-07-24'
-        self.country = 'KZ'
-        self.username_table = {'mshpadi': None}
+        self.src = None
+        self.date=  None
+        self.country = None
+        self.username_table = {}
         self.http_debug = False
         self.log_level = 'DEBUG'
         self.key = '03ECF5952EB046AC-A53195E89B7996E4-D1B128E82C3E2A66'
         self.lng = 'en'
-        self.login = 'wind3style'
-        self.password = 'CdEdd8wk1sYk'
-        self.igc_dir = 'd:\Trash\#863 XC Export'
+        self.login = None
+        self.password = None
+        self.track_dir = None
+        self.attendence_list_file = None
+        self.http_retry_sleep=20
+        self.http_retry_count=5
 
 config = Config()
 sess = None
 
 def main():
     global sess
+
+    read_config('xc_export_conf.ini')
+
     logging.basicConfig(level=config.log_level, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logging.info('XCTrack fly log exporter')
+
+
+    read_attendence_list()
 
     http_sess_init()
 
     flights = XC_flights_fillter(config.src, config.date, config.country)
-    logging.info('Flights:')
-    logging.info(json.dumps(flights, indent=4))
+    logging.info('Got list of flights: %d'%(len(flights)))
+    logging.debug('Flights:')
+    logging.debug(json.dumps(flights, indent=4))
     for flight in flights:
         if flight['pilot']['username'] in config.username_table:
+            xc_user = config.username_table[flight['pilot']['username']]
             name = flight['pilot']['name']
             logging.info(f'Pilot "{name}" selected')
                 ### get flight IGC
@@ -43,12 +60,66 @@ def main():
             lng = config.lng
             url = f'https://www.xcontest.org/api/data/?flights_/{src}:{flight_id}&lng={lng}&key={key}'
             details = http_req_get_json(url)
-            logging.info(f'Flight details:')
-            logging.info(json.dumps(details, indent=4))
+            logging.info(f'Got flight details for "{name}"')
+            logging.debug(f'Flight details:')
+            logging.debug(json.dumps(details, indent=4))
             igc_data = http_req_get_binary(details['igc']['link'])
-            igc_file_path = os.path.join(config.igc_dir, name + ".igc")
+            logging.info(f'Got IGC track for "{name}"')
+            igc_file_path = os.path.join(config.track_dir, make_igc_file_name(xc_user, details))
             with open(igc_file_path, "wb") as fout:
                 fout.write(igc_data)
+
+def read_config(file_name):
+    global config
+    try:
+        cParser = configparser.ConfigParser()
+        f = open(file_name)
+        cParser.read_file(f)
+
+        get_param(cParser, 'MAIN', 'src', config, 'src', str, True)
+        get_param(cParser, 'MAIN', 'date', config, 'date', str, True)
+        get_param(cParser, 'MAIN', 'country', config, 'country', str, True)
+        get_param(cParser, 'MAIN', 'http_debug', config, 'http_debug', bool, False)
+        get_param(cParser, 'MAIN', 'log_level', config, 'log_level', str, False)
+        get_param(cParser, 'MAIN', 'key', config, 'key', str, False)
+        get_param(cParser, 'MAIN', 'lng', config, 'lng', str, False)
+        get_param(cParser, 'MAIN', 'login', config, 'login', str, True)
+        get_param(cParser, 'MAIN', 'password', config, 'password', str, True)
+        get_param(cParser, 'MAIN', 'track_dir', config, 'track_dir', str, True)
+        get_param(cParser, 'MAIN', 'attendence_list_file', config, 'attendence_list_file', str, True)
+
+        get_param(cParser, 'MAIN', 'http_retry_sleep', config, 'http_retry_sleep', int, False)
+        get_param(cParser, 'MAIN', 'http_retry_count', config, 'http_retry_count', int, False)
+
+        if config.log_level not in ['DEBUG', 'INFO', 'ERROR']:
+            raise Exception('Incorrect log_level value: "%s"'%(config.log_level))
+
+    except Exception as e:
+        logging.error(f'config error: ' + str(e))
+        sys.exit(1)
+
+'''
+details:
+"ident": "mshpadi/24.07.2023/05:52"
+'''
+def make_igc_file_name(xc_user, details):
+    ident = details['ident']
+    logging.debug(f'make_igc_file_name: Ident: "{ident}"')
+    m = re.match(r'^(.*)\/(\d{2})\.(\d{2})\.(\d{4})\/(\d{2})\:(\d{2})$', ident)
+    if m != None:
+        login = m.group(1)
+        DD = m.group(2)
+        MM = m.group(3)
+        YYYY = m.group(4)
+        H24 = m.group(5)
+        MI = m.group(6)
+        SEC = '00'
+        file_name = xc_user['name'] + '.' + f'{YYYY}{MM}{DD}-{H24}{MI}{SEC}' + '.' + '[CIVLID]' + '.' + str(xc_user['number']) + '.igc'
+        logging.info(f'track file name: "{file_name}"')
+        return file_name
+    else:
+        raise Exception(f'Incorrect format ident: {ident}')
+
 
 def XC_flights_fillter(src, date, country):
     global sess
@@ -118,14 +189,64 @@ def http_req_get(url, **kwargs):
     return http_req_get_binary(url, **kwargs).decode('utf-8')
 
 def http_req_get_binary(url, **kwargs):
-    resp = sess.get(url, **kwargs)
-    logging.debug('HTTP resp status code: %s' % (resp.status_code))
-    logging.debug('HTTP resp content: %s' % (resp.content))
-    if resp.status_code == 200:
-        return resp.content
-    else:
-        raise Exception("Incorrect HTTP status code: %s" % (resp.status_code))
+    for i in range(config.http_retry_count):
+        resp = sess.get(url, **kwargs)
+        logging.debug('HTTP resp status code: %s' % (resp.status_code))
+        logging.debug('HTTP resp content: %s' % (resp.content))
 
+        if resp.status_code == 450:
+            logging.warning('HTTP resp status code: %s, URL: %s - sleep %d sec and retry' % (resp.status_code, url, config.http_retry_sleep))
+            time.sleep(config.http_retry_sleep)
+            continue
+
+        if resp.status_code == 200:
+            return resp.content
+        else:
+            raise Exception("Incorrect HTTP status code: %s" % (resp.status_code))
+
+    raise Exception("Excceed max time attempts")
+
+def read_attendence_list():
+    global config
+
+    df = pd.read_excel(
+        config.attendence_list_file,
+        engine='openpyxl'
+    )
+    logging.info("Attendence list:\n" + str(df))
+    row_num = 0
+    while(True):
+        try:
+            login = df['Login'][row_num]
+            number = df['Number'][row_num]
+            name = df['Name'][row_num]
+            logging.debug(f'Login: "{login}", \tNumber: "{number}", \tName: "{name}"')
+            config.username_table[login] = {'number': number, 'name': name}
+            row_num += 1
+        except KeyError:
+            break
+
+def get_param(cParser, section, object_var_name, conf_obj, param_name, param_type=str, mantatory_flag=True):
+    if cParser == None:
+        raise CONFIG_EXCEPTION("Incorrect use get_param()")
+    if cParser.has_option(section, param_name):
+        if param_type == bool:
+            val = cParser[section].getboolean(param_name)
+        else:
+            val = cParser[section][param_name]
+            if type(val) != param_type:
+                if param_type == int:
+                    try:
+                        val = int(val)
+                    except Exception as e:
+                        raise CONFIG_EXCEPTION("Incorrect parameter value for %s:%s - %s"%(section, param_name, str(e)))
+                else:
+                    raise CONFIG_EXCEPTION("Unknow parameter type for %s:%s"%(section, param_name))
+
+        setattr(conf_obj, object_var_name, val)
+    else:
+        if mantatory_flag:
+            raise CONFIG_EXCEPTION("Error config: " + "[" + section +"]." + param_name +" MUST be defined")
 
 if __name__ == '__main__':
     main()
