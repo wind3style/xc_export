@@ -27,6 +27,7 @@ class Config:
         self.attendence_list_file = None
         self.http_retry_sleep=20
         self.http_retry_count=5
+        self.log_file = None
 
 config = Config()
 sess = None
@@ -36,7 +37,13 @@ def main():
 
     read_config('xc_export_conf.ini')
 
-    logging.basicConfig(level=config.log_level, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    log_args =  {'level': config.log_level, 'encoding': 'utf-8', 'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s', 'handlers': [ logging.StreamHandler() ]}
+
+
+    if config.log_file != None:
+        log_args['handlers'].append(logging.FileHandler(config.log_file, mode='a', encoding='utf-8'))
+
+    logging.basicConfig(**log_args)
     logging.info('XCTrack fly log exporter')
 
 
@@ -58,7 +65,7 @@ def main():
             flight_id = flight['id']
             key = config.key
             lng = config.lng
-            url = f'https://www.xcontest.org/api/data/?flights_/{src}:{flight_id}&lng={lng}&key={key}'
+            url = f'https://www.xcontest.org/api/data/?flights/{src}:{flight_id}&lng={lng}&key={key}'
             details = http_req_get_json(url)
             logging.info(f'Got flight details for "{name}"')
             logging.debug(f'Flight details:')
@@ -90,6 +97,7 @@ def read_config(file_name):
 
         get_param(cParser, 'MAIN', 'http_retry_sleep', config, 'http_retry_sleep', int, False)
         get_param(cParser, 'MAIN', 'http_retry_count', config, 'http_retry_count', int, False)
+        get_param(cParser, 'MAIN', 'log_file', config, 'log_file', str, False)
 
         if config.log_level not in ['DEBUG', 'INFO', 'ERROR']:
             raise Exception('Incorrect log_level value: "%s"'%(config.log_level))
@@ -183,7 +191,11 @@ def http_sess_init():
         logging.error('"Username or password you have entered is not valid"')
         sys.exit(1)
 def http_req_get_json(url, **kwargs):
-    return json.loads(http_req_get(url, **kwargs))
+    try:
+        json_string = http_req_get(url, **kwargs)
+        return json.loads(json_string)
+    except Exception as e:
+        raise Exception("Incorrect JSON, exception: '%s', JSON: '%s'"%(str(e), json_string))
 
 def http_req_get(url, **kwargs):
     return http_req_get_binary(url, **kwargs).decode('utf-8')
