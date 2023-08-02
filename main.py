@@ -26,7 +26,7 @@ class Config:
         self.src = None
         self.date=  None
         self.country = None
-        self.username_table = {}
+        self.username_table = None
         self.http_debug = False
         self.log_level = 'DEBUG'
         self.key = '03ECF5952EB046AC-A53195E89B7996E4-D1B128E82C3E2A66'
@@ -37,6 +37,7 @@ class Config:
         self.attendence_list_file = None
         self.log_file = None
         self.tracks_loaded_file_name = "tracks_loaded.json"
+        self.igc_file_name = None
 
 config = Config()
 sess = None
@@ -64,7 +65,7 @@ def main():
         logging.debug('Flights:')
         logging.debug(json.dumps(flights, indent=4))
         for flight in flights:
-            if flight['pilot']['username'] in config.username_table:
+            if (config.username_table != None and flight['pilot']['username'] in config.username_table) or (config.username_table == None):
 
                 ### make date dir
                 track_date_dir = os.path.join(config.track_dir, config.date)
@@ -78,7 +79,11 @@ def main():
                     logging.info(f'Track loaded file path {tracks_loaded_file_path} wasn\'t find')
                     tracks_loaded = dict()
 
-                xc_user = config.username_table[flight['pilot']['username']]
+                if config.username_table != None:
+                    xlsx_user = config.username_table[flight['pilot']['username']]
+                else:
+                    xlsx_user = None
+
                 name = flight['pilot']['name']
                 logging.info(f'Pilot "{name}" selected')
                     ### get flight IGC
@@ -89,7 +94,7 @@ def main():
                 url = f'https://www.xcontest.org/api/data/?flights/{src}:{flight_id}&lng={lng}&key={key}'
 
                 if str(flight_id) in tracks_loaded:
-                    logging.info(f'Flight_id: {flight_id} already loaded, pilot name: {xc_user}')
+                    logging.info(f'Flight_id: {flight_id} already loaded, pilot name: {name}')
                     continue
 
                 details = http_req_get_json(url)
@@ -105,7 +110,7 @@ def main():
                 except FileExistsError:
                     pass
 
-                igc_file_path = os.path.join(track_date_dir, make_igc_file_name(xc_user, details))
+                igc_file_path = os.path.join(track_date_dir, make_igc_file_name(xlsx_user, details))
                 with open(igc_file_path, "wb") as fout:
                     fout.write(igc_data)
 
@@ -137,10 +142,12 @@ def read_config(file_name):
         get_param(cParser, 'MAIN', 'key', config, 'key', str, False)
         get_param(cParser, 'MAIN', 'lng', config, 'lng', str, False)
         get_param(cParser, 'MAIN', 'track_dir', config, 'track_dir', str, True)
-        get_param(cParser, 'MAIN', 'attendence_list_file', config, 'attendence_list_file', str, True)
+        get_param(cParser, 'MAIN', 'attendence_list_file', config, 'attendence_list_file', str, False)
 
         get_param(cParser, 'MAIN', 'log_file', config, 'log_file', str, False)
         get_param(cParser, 'MAIN', 'tracks_loaded_file_name', config, 'tracks_loaded_file_name', str, False)
+
+        get_param(cParser, 'MAIN', 'igc_file_name', config, 'igc_file_name', str, True)
 
         if config.log_level not in ['DEBUG', 'INFO', 'ERROR']:
             raise MAIN_EXCEPTION('Incorrect log_level value: "%s"'%(config.log_level))
@@ -162,7 +169,7 @@ def read_config(file_name):
 details:
 "ident": "mshpadi/24.07.2023/05:52"
 '''
-def make_igc_file_name(xc_user, details):
+def make_igc_file_name(xlsx_user, details):
     ident = details['ident']
     logging.debug(f'make_igc_file_name: Ident: "{ident}"')
     m = re.match(r'^(.*)\/(\d{2})\.(\d{2})\.(\d{4})\/(\d{2})\:(\d{2})$', ident)
@@ -174,7 +181,21 @@ def make_igc_file_name(xc_user, details):
         H24 = m.group(5)
         MI = m.group(6)
         SEC = '00'
-        file_name = xc_user['name'] + '.' + f'{YYYY}{MM}{DD}-{H24}{MI}{SEC}' + '.' + '[CIVLID]' + '.' + str(xc_user['number']) + '.igc'
+        file_name = config.igc_file_name
+        file_name = file_name.replace("[YYYY]", YYYY)
+        file_name = file_name.replace("[DD]", DD)
+        file_name = file_name.replace("[MM]", MM)
+        file_name = file_name.replace("[H24]", H24)
+        file_name = file_name.replace("[MI]", MI)
+        file_name = file_name.replace("[SEC]", SEC)
+        file_name = file_name.replace("[LOGIN]", login)
+        file_name = file_name.replace("[XC_NAME]", str(details['pilot']['name']))
+        file_name = file_name.replace("[XC_CIVL]", str(details['pilot']['idCivl']))
+
+        if xlsx_user != None:
+            for field_name in xlsx_user:
+                file_name = file_name.replace(f"[XLSX-{field_name}]", str(xlsx_user[field_name]))
+
         logging.info(f'track file name: "{file_name}"')
         return file_name
     else:
@@ -299,6 +320,9 @@ def http_req_get_binary(url, **kwargs):
 def read_attendence_list():
     global config
 
+    if config.attendence_list_file == None:
+        return
+
     df = pd.read_excel(
         config.attendence_list_file,
         engine='openpyxl'
@@ -308,10 +332,15 @@ def read_attendence_list():
     while(True):
         try:
             login = df['Login'][row_num]
-            number = df['Number'][row_num]
-            name = df['Name'][row_num]
-            logging.debug(f'Login: "{login}", \tNumber: "{number}", \tName: "{name}"')
-            config.username_table[login] = {'number': number, 'name': name}
+            values = dict()
+            for field_name in df:
+                values[field_name] = df[field_name][row_num]
+            logging.debug(f'Login: "{login}", fiend_values: ' + str(values))
+
+            if config.username_table == None:
+                config.username_table = dict()
+
+            config.username_table[login] = values
             row_num += 1
         except KeyError:
             break
