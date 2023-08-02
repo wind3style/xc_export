@@ -35,9 +35,8 @@ class Config:
         self.account_inx = None
         self.track_dir = None
         self.attendence_list_file = None
-        self.http_retry_sleep=20
-        self.http_retry_count=2
         self.log_file = None
+        self.tracks_loaded_file_name = "tracks_loaded.json"
 
 config = Config()
 sess = None
@@ -66,6 +65,19 @@ def main():
         logging.debug(json.dumps(flights, indent=4))
         for flight in flights:
             if flight['pilot']['username'] in config.username_table:
+
+                ### make date dir
+                track_date_dir = os.path.join(config.track_dir, config.date)
+
+                tracks_loaded_file_path = os.path.join(track_date_dir, config.tracks_loaded_file_name)
+                ### Read flights from file
+                try:
+                    with open(tracks_loaded_file_path, "r", encoding='utf8') as fin:
+                        tracks_loaded = json.load(fin)
+                except FileNotFoundError:
+                    logging.info(f'Track loaded file path {tracks_loaded_file_path} wasn\'t find')
+                    tracks_loaded = dict()
+
                 xc_user = config.username_table[flight['pilot']['username']]
                 name = flight['pilot']['name']
                 logging.info(f'Pilot "{name}" selected')
@@ -75,18 +87,39 @@ def main():
                 key = config.key
                 lng = config.lng
                 url = f'https://www.xcontest.org/api/data/?flights/{src}:{flight_id}&lng={lng}&key={key}'
+
+                if str(flight_id) in tracks_loaded:
+                    logging.info(f'Flight_id: {flight_id} already loaded, pilot name: {xc_user}')
+                    continue
+
                 details = http_req_get_json(url)
                 logging.info(f'Got flight details for "{name}"')
                 logging.debug(f'Flight details:')
                 logging.debug(json.dumps(details, indent=4))
                 igc_data = http_req_get_binary(details['igc']['link'])
                 logging.info(f'Got IGC track for "{name}"')
-                igc_file_path = os.path.join(config.track_dir, make_igc_file_name(xc_user, details))
+
+                    ### Create dir
+                try:
+                    os.makedirs(track_date_dir)
+                except FileExistsError:
+                    pass
+
+                igc_file_path = os.path.join(track_date_dir, make_igc_file_name(xc_user, details))
                 with open(igc_file_path, "wb") as fout:
                     fout.write(igc_data)
 
+                    ### add flight to file
+                tracks_loaded[flight_id] = {'name': details['pilot']['name'], 'ident': details['ident']}
+
+                with open(tracks_loaded_file_path, "w", encoding='utf8') as fout:
+                    json.dump(tracks_loaded, fout, indent=4, ensure_ascii=False)
+
+
     except MAIN_EXCEPTION as e:
         logging.error(f'main error: ' + str(e))
+    except KeyboardInterrupt:
+        logging.error(f'KeyboardInterrupt')
 
 
 def read_config(file_name):
@@ -106,9 +139,8 @@ def read_config(file_name):
         get_param(cParser, 'MAIN', 'track_dir', config, 'track_dir', str, True)
         get_param(cParser, 'MAIN', 'attendence_list_file', config, 'attendence_list_file', str, True)
 
-        get_param(cParser, 'MAIN', 'http_retry_sleep', config, 'http_retry_sleep', int, False)
-        get_param(cParser, 'MAIN', 'http_retry_count', config, 'http_retry_count', int, False)
         get_param(cParser, 'MAIN', 'log_file', config, 'log_file', str, False)
+        get_param(cParser, 'MAIN', 'tracks_loaded_file_name', config, 'tracks_loaded_file_name', str, False)
 
         if config.log_level not in ['DEBUG', 'INFO', 'ERROR']:
             raise MAIN_EXCEPTION('Incorrect log_level value: "%s"'%(config.log_level))
@@ -240,7 +272,7 @@ def http_req_get(url, **kwargs):
     return http_req_get_binary(url, **kwargs).decode('utf-8')
 
 def http_req_get_binary(url, **kwargs):
-    for i in range(config.http_retry_count):
+    while True:
         resp = sess.get(url, **kwargs)
         if resp.status_code == 200:
             logging.debug('HTTP resp status code: %s' % (resp.status_code))
@@ -251,9 +283,10 @@ def http_req_get_binary(url, **kwargs):
 
         if resp.status_code in [450, 429]:
             http_sess_init()
+
             if config.account_inx == 0:
-                logging.warning('HTTP resp status code: %s, URL: %s - sleep %d sec and retry' % (resp.status_code, url, config.http_retry_sleep))
-                time.sleep(config.http_retry_sleep)
+                raise MAIN_EXCEPTION("No more accounts")
+
             continue
 
         if resp.status_code == 200:
