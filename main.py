@@ -38,6 +38,7 @@ class Config:
         self.log_file = None
         self.tracks_loaded_file_name = "tracks_loaded.json"
         self.igc_file_name = None
+        self.xc_max_flights = 1000
 
 config = Config()
 sess = None
@@ -136,7 +137,7 @@ def read_config(file_name):
 
         get_param(cParser, 'MAIN', 'src', config, 'src', str, True)
         get_param(cParser, 'MAIN', 'date', config, 'date', str, True)
-        get_param(cParser, 'MAIN', 'country', config, 'country', str, True)
+        get_param(cParser, 'MAIN', 'country', config, 'country', str, False)
         get_param(cParser, 'MAIN', 'http_debug', config, 'http_debug', bool, False)
         get_param(cParser, 'MAIN', 'log_level', config, 'log_level', str, False)
         get_param(cParser, 'MAIN', 'key', config, 'key', str, False)
@@ -148,6 +149,8 @@ def read_config(file_name):
         get_param(cParser, 'MAIN', 'tracks_loaded_file_name', config, 'tracks_loaded_file_name', str, False)
 
         get_param(cParser, 'MAIN', 'igc_file_name', config, 'igc_file_name', str, True)
+
+        get_param(cParser, 'MAIN', 'xc_max_flights', config, 'xc_max_flights', int, False)
 
         if config.log_level not in ['DEBUG', 'INFO', 'ERROR']:
             raise MAIN_EXCEPTION('Incorrect log_level value: "%s"'%(config.log_level))
@@ -172,11 +175,11 @@ details:
 def make_igc_file_name(xlsx_user, details):
     ident = details['ident']
     logging.debug(f'make_igc_file_name: Ident: "{ident}"')
-    m = re.match(r'^(.*)\/(\d{2})\.(\d{2})\.(\d{4})\/(\d{2})\:(\d{2})$', ident)
+    m = re.match(r'^(.*)\/(\d{1,2})\.(\d{1,2})\.(\d{4})\/(\d{2})\:(\d{2})$', ident)
     if m != None:
         login = m.group(1)
-        DD = m.group(2)
-        MM = m.group(3)
+        DD = "%.2d"%int(m.group(2))
+        MM = "%.2d"%int(m.group(3))
         YYYY = m.group(4)
         H24 = m.group(5)
         MI = m.group(6)
@@ -215,10 +218,12 @@ def XC_flights_fillter(src, date, country):
             'params[]': 'd002d4fc16ebc1833e6702cce8ede488',
             'list[sort]': 'reg',
             'list[start]': '0',
-            'list[num]': '100',
+            'list[num]': str(config.xc_max_flights),
             'list[dir]': 'down',
-            'filter[date]': date,
-            'filter[country]': country}
+            'filter[date]': date}
+
+    if country != None:
+        params['filter[country]'] = country
 
     content = http_req_get(url, params=params)
     m = re.search(r'window.top.ZenController._callJSONP\((.*),(.*)\)', content)
@@ -262,17 +267,15 @@ def http_sess_init():
     else:
         config.account_inx += 1
 
-    logging.info("Select account: inx: %d"%(config.account_inx))
-
     if config.account_inx >= len(config.accounts):
-        logging.info("Account is finished, account_inx = 0")
-        config.account_inx = 0
+        raise MAIN_EXCEPTION("Exceeded limit for all accounts")
+    else:
+        logging.info("Select account: inx: %d" % (config.account_inx))
 
     conf_account = config.accounts[config.account_inx]
 
     resp = sess.post('https://www.xcontest.org/world/en/', data={'login[username]': conf_account.login, 'login[password]': conf_account.password})
-    logging.debug('HTTP resp status code: %s' % (resp.status_code))
-    logging.debug('HTTP resp content: %s' % (resp.content))
+    logging.debug('HTTP resp status code: %s, content: %s' % (resp.status_code, str(resp.content)))
     if resp.status_code != 200:
         raise MAIN_EXCEPTION("Incorrect HTTP status code: %s" % (resp.status_code))
     content = resp.content.decode('utf-8')
@@ -287,7 +290,7 @@ def http_req_get_json(url, **kwargs):
         json_string = http_req_get(url, **kwargs)
         return json.loads(json_string)
     except Exception as e:
-        raise MAIN_EXCEPTION("Incorrect JSON, exception: '%s', JSON: '%s'"%(str(e), json_string))
+        raise MAIN_EXCEPTION("Incorrect JSON, exception: '%s'"%(str(e)))
 
 def http_req_get(url, **kwargs):
     return http_req_get_binary(url, **kwargs).decode('utf-8')
@@ -295,18 +298,14 @@ def http_req_get(url, **kwargs):
 def http_req_get_binary(url, **kwargs):
     while True:
         resp = sess.get(url, **kwargs)
+        text_http_status = 'HTTP resp status code: %s, content: %s' % (resp.status_code, str(resp.content))
         if resp.status_code == 200:
-            logging.debug('HTTP resp status code: %s' % (resp.status_code))
-            logging.debug('HTTP resp content: %s' % (resp.content))
+            logging.debug(text_http_status)
         else:
-            logging.info('HTTP resp status code: %s' % (resp.status_code))
-            logging.info('HTTP resp content: %s' % (resp.content))
+            logging.warning(text_http_status)
 
         if resp.status_code in [450, 429]:
             http_sess_init()
-
-            if config.account_inx == 0:
-                raise MAIN_EXCEPTION("No more accounts")
 
             continue
 
