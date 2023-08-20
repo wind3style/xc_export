@@ -8,6 +8,8 @@ import pandas as pd
 import configparser
 import time
 
+version = "v1.1.1"
+
 class MAIN_EXCEPTION(Exception):
     pass
 
@@ -45,9 +47,12 @@ sess = None
 
 def main():
     global sess
+    global config
 
     try:
         read_config('xc_export_conf.ini')
+
+#        config.track_dir.encode('utf8').decode('cp1251')
 
         log_args =  {'level': config.log_level, 'encoding': 'utf-8', 'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s', 'handlers': [ logging.StreamHandler() ]}
 
@@ -55,7 +60,7 @@ def main():
             log_args['handlers'].append(logging.FileHandler(config.log_file, mode='a', encoding='utf-8'))
 
         logging.basicConfig(**log_args)
-        logging.info('XCTrack fly log exporter')
+        logging.info('XCTrack fly log exporter, version: %s'%(version))
 
         read_attendence_list()
 
@@ -132,7 +137,7 @@ def read_config(file_name):
     global config
     try:
         cParser = configparser.ConfigParser()
-        f = open(file_name)
+        f = open(file_name, encoding='utf-8')
         cParser.read_file(f)
 
         get_param(cParser, 'MAIN', 'src', config, 'src', str, True)
