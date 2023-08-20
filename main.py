@@ -8,7 +8,7 @@ import pandas as pd
 import configparser
 import time
 
-version = "v1.1.1"
+version = "v1.1.2"
 
 class MAIN_EXCEPTION(Exception):
     pass
@@ -27,6 +27,7 @@ class Config:
     def __init__(self):
         self.src = None
         self.date=  None
+        self.date_name = None
         self.country = None
         self.username_table = None
         self.http_debug = False
@@ -75,6 +76,9 @@ def main():
 
                 ### make date dir
                 track_date_dir = os.path.join(config.track_dir, config.date)
+
+                if config.date_name != None:
+                    track_date_dir += " " + config.date_name
 
                 tracks_loaded_file_path = os.path.join(track_date_dir, config.tracks_loaded_file_name)
                 ### Read flights from file
@@ -142,6 +146,7 @@ def read_config(file_name):
 
         get_param(cParser, 'MAIN', 'src', config, 'src', str, True)
         get_param(cParser, 'MAIN', 'date', config, 'date', str, True)
+        get_param(cParser, 'MAIN', 'date_name', config, 'date_name', str, False)
         get_param(cParser, 'MAIN', 'country', config, 'country', str, False)
         get_param(cParser, 'MAIN', 'http_debug', config, 'http_debug', bool, False)
         get_param(cParser, 'MAIN', 'log_level', config, 'log_level', str, False)
