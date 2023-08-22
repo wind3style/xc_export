@@ -8,7 +8,7 @@ import pandas as pd
 import configparser
 import time
 
-version = "v1.1.2"
+version = "v1.1.3"
 
 class MAIN_EXCEPTION(Exception):
     pass
@@ -42,6 +42,7 @@ class Config:
         self.tracks_loaded_file_name = "tracks_loaded.json"
         self.igc_file_name = None
         self.xc_max_flights = 1000
+        self.only_check=False
 
 config = Config()
 sess = None
@@ -73,6 +74,9 @@ def main():
         logging.debug(json.dumps(flights, indent=4))
         for flight in flights:
             if (config.username_table != None and flight['pilot']['username'] in config.username_table) or (config.username_table == None):
+
+                if config.only_check == True:   ### skip downloading track
+                    continue
 
                 ### make date dir
                 track_date_dir = os.path.join(config.track_dir, config.date)
@@ -129,6 +133,11 @@ def main():
 
                 with open(tracks_loaded_file_path, "w", encoding='utf8') as fout:
                     json.dump(tracks_loaded, fout, indent=4, ensure_ascii=False)
+            else:
+                if config.username_table != None:
+                    name = flight['pilot']['name']
+                    username = flight['pilot']['username']
+                    logging.info(f'Pilot "{name}", username: "{username}" wasn\'t found in attendence list')
 
 
     except MAIN_EXCEPTION as e:
@@ -161,6 +170,7 @@ def read_config(file_name):
         get_param(cParser, 'MAIN', 'igc_file_name', config, 'igc_file_name', str, True)
 
         get_param(cParser, 'MAIN', 'xc_max_flights', config, 'xc_max_flights', int, False)
+        get_param(cParser, 'MAIN', 'only_check', config, 'only_check', bool, False)
 
         if config.log_level not in ['DEBUG', 'INFO', 'ERROR']:
             raise MAIN_EXCEPTION('Incorrect log_level value: "%s"'%(config.log_level))
