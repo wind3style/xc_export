@@ -1,0 +1,22 @@
+[MAIN]
+src=world/2023
+date=2023-08-01
+#country=KZ
+log_level=INFO
+key=03ECF5952EB046AC-A53195E89B7996E4-D1B128E82C3E2A66
+lng=en
+track_dir=d:\Trash\#863 XC Export\\tracks
+#igc_file_name=[XLSX-Name].[YYYY][MM][DD]-[H24][MI][SEC].[CIVLID].[XLSX-Number].igc
+igc_file_name=[YYYY][MM][DD]-[H24][MI][SEC].[XC_NAME].[LOGIN].igc
+#attendence_list_file =d:\Trash\#863 XC Export\Attendence list test.xlsx
+#attendence_list_file =d:\Trash\#863 XC Export\Attendence list.xlsx
+#log_file=xc_export.log
+
+[ACCOUNT:1]
+login=wind3style
+password=CdEdd8wk1sYk
+
+[ACCOUNT:2]
+login=wind3style-2
+password=CdEdd8wk1sYk
+

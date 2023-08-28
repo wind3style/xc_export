@@ -8,7 +8,7 @@ import pandas as pd
 import configparser
 import time
 
-version = "v1.1.3"
+version = "v1.2.0"
 
 class MAIN_EXCEPTION(Exception):
     pass
@@ -30,6 +30,7 @@ class Config:
         self.date_name = None
         self.country = None
         self.username_table = None
+        self.tg_username_table = None
         self.http_debug = False
         self.log_level = 'DEBUG'
         self.key = '03ECF5952EB046AC-A53195E89B7996E4-D1B128E82C3E2A66'
@@ -43,13 +44,21 @@ class Config:
         self.igc_file_name = None
         self.xc_max_flights = 1000
         self.only_check=False
+        self.tg_bot_dir=None
 
 config = Config()
 sess = None
 
-def main():
+def main(argv):
     global sess
     global config
+
+    if len(argv) >= 2 and argv[1] == 'unit-test':
+        log_args =  {'level': 'DEBUG', 'encoding': 'utf-8', 'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s', 'handlers': [ logging.StreamHandler() ]}
+        logging.basicConfig(**log_args)
+        logging.info('Unit-test mode')
+        test_make_igc_file_name()
+        sys.exit(0)
 
     try:
         read_config('xc_export_conf.ini')
@@ -68,6 +77,26 @@ def main():
 
         http_sess_init()
 
+        ### make date dir
+        track_date_dir = os.path.join(config.track_dir, config.date)
+        if config.date_name != None:
+            track_date_dir += " " + config.date_name
+
+            ### Create dir
+        try:
+            os.makedirs(track_date_dir)
+        except FileExistsError:
+            pass
+
+        tracks_loaded_file_path = os.path.join(track_date_dir, config.tracks_loaded_file_name)
+        ### Read flights from file
+        try:
+            with open(tracks_loaded_file_path, "r", encoding='utf8') as fin:
+                tracks_loaded = json.load(fin)
+        except FileNotFoundError:
+            logging.info(f'Track loaded file path {tracks_loaded_file_path} wasn\'t find')
+            tracks_loaded = dict()
+
         flights = XC_flights_fillter(config.src, config.date, config.country)
         logging.info('Got list of flights: %d'%(len(flights)))
         logging.debug('Flights:')
@@ -77,21 +106,6 @@ def main():
 
                 if config.only_check == True:   ### skip downloading track
                     continue
-
-                ### make date dir
-                track_date_dir = os.path.join(config.track_dir, config.date)
-
-                if config.date_name != None:
-                    track_date_dir += " " + config.date_name
-
-                tracks_loaded_file_path = os.path.join(track_date_dir, config.tracks_loaded_file_name)
-                ### Read flights from file
-                try:
-                    with open(tracks_loaded_file_path, "r", encoding='utf8') as fin:
-                        tracks_loaded = json.load(fin)
-                except FileNotFoundError:
-                    logging.info(f'Track loaded file path {tracks_loaded_file_path} wasn\'t find')
-                    tracks_loaded = dict()
 
                 if config.username_table != None:
                     xlsx_user = config.username_table[flight['pilot']['username']]
@@ -118,13 +132,7 @@ def main():
                 igc_data = http_req_get_binary(details['igc']['link'])
                 logging.info(f'Got IGC track for "{name}"')
 
-                    ### Create dir
-                try:
-                    os.makedirs(track_date_dir)
-                except FileExistsError:
-                    pass
-
-                igc_file_path = os.path.join(track_date_dir, make_igc_file_name(xlsx_user, details))
+                igc_file_path = os.path.join(track_date_dir, make_igc_file_name(xlsx_user, xc_details=details))
                 with open(igc_file_path, "wb") as fout:
                     fout.write(igc_data)
 
@@ -138,6 +146,51 @@ def main():
                     name = flight['pilot']['name']
                     username = flight['pilot']['username']
                     logging.info(f'Pilot "{name}", username: "{username}" wasn\'t found in attendence list')
+
+            ### Read telegram bot tracks
+        if config.tg_bot_dir != None:
+            logging.debug(f'Read TG bot files')
+            tg_bot_date_dir = os.path.join(config.tg_bot_dir, config.date)
+            try:
+                tg_file_list = os.listdir(tg_bot_date_dir)
+            except FileNotFoundError as e:
+                logging.error(f'cannot find TG path: {tg_bot_date_dir}')
+
+            for file_name in tg_file_list:
+                logging.debug(f'TG file "{file_name}"')
+                m = re.match(r'^([^\#]*)\#([^\#]*)\#(.*)$', file_name)
+                if m != None:
+                    date_str = m.group(1)
+                    tg_username = m.group(2)
+                    igc_file_name = m.group(3)
+                    logging.debug(f'date: "{date_str}", tg_username: "{tg_username}", igc_file_name: "{igc_file_name}"')
+
+                    igc_data = None
+
+                    if file_name in tracks_loaded:
+                        logging.info(f'File name: {file_name} already loaded')
+                        continue
+
+                    try:
+                        tg_bot_date_path_igc = os.path.join(tg_bot_date_dir, file_name)
+                        with open(tg_bot_date_path_igc, "r", encoding='utf8') as fin:
+                            igc_data = fin.read()
+                    except FileNotFoundError:
+                        logging.info(f'IGC file path {tg_bot_date_path_igc} wasn\'t find')
+
+                    if tg_username in config.tg_username_table:
+                        xlsx_user = config.tg_username_table[tg_username]
+                        tg_details = {'username': tg_username, 'date': date_str, 'file_name': file_name}
+                        igc_file_path = os.path.join(track_date_dir, make_igc_file_name(xlsx_user, tg_details=tg_details))
+                            ### copy file
+                        with open(igc_file_path, "w", encoding='utf8') as fout:
+                            fout.write(igc_data)
+
+                            ### add flight to file
+                        tracks_loaded[file_name] = tg_details
+
+                        with open(tracks_loaded_file_path, "w", encoding='utf8') as fout:
+                            json.dump(tracks_loaded, fout, indent=4, ensure_ascii=False)
 
 
     except MAIN_EXCEPTION as e:
@@ -171,6 +224,7 @@ def read_config(file_name):
 
         get_param(cParser, 'MAIN', 'xc_max_flights', config, 'xc_max_flights', int, False)
         get_param(cParser, 'MAIN', 'only_check', config, 'only_check', bool, False)
+        get_param(cParser, 'MAIN', 'tg_bot_dir', config, 'tg_bot_dir', str, False)
 
         if config.log_level not in ['DEBUG', 'INFO', 'ERROR']:
             raise MAIN_EXCEPTION('Incorrect log_level value: "%s"'%(config.log_level))
@@ -188,41 +242,84 @@ def read_config(file_name):
         logging.error(f'config error: ' + str(e))
         sys.exit(1)
 
+
 '''
-details:
+xc_details:
 "ident": "mshpadi/24.07.2023/05:52"
 '''
-def make_igc_file_name(xlsx_user, details):
-    ident = details['ident']
-    logging.debug(f'make_igc_file_name: Ident: "{ident}"')
-    m = re.match(r'^(.*)\/(\d{1,2})\.(\d{1,2})\.(\d{4})\/(\d{2})\:(\d{2})$', ident)
-    if m != None:
-        login = m.group(1)
-        DD = "%.2d"%int(m.group(2))
-        MM = "%.2d"%int(m.group(3))
-        YYYY = m.group(4)
-        H24 = m.group(5)
-        MI = m.group(6)
-        SEC = '00'
-        file_name = config.igc_file_name
-        file_name = file_name.replace("[YYYY]", YYYY)
-        file_name = file_name.replace("[DD]", DD)
-        file_name = file_name.replace("[MM]", MM)
-        file_name = file_name.replace("[H24]", H24)
-        file_name = file_name.replace("[MI]", MI)
-        file_name = file_name.replace("[SEC]", SEC)
-        file_name = file_name.replace("[LOGIN]", login)
-        file_name = file_name.replace("[XC_NAME]", str(details['pilot']['name']))
-        file_name = file_name.replace("[XC_CIVL]", str(details['pilot']['idCivl']))
+def make_igc_file_name(xlsx_user, **kwargs):
+    H24 = '00'
+    MI = '00'
+    SEC = '00'
+    login = 'None'
+    file_name = config.igc_file_name
+    if 'xc_details' in kwargs:
+        xc_details = kwargs['xc_details']
+        ident = xc_details['ident']
+        logging.debug(f'make_igc_file_name: Ident: "{ident}"')
+        m = re.match(r'^(.*)\/(\d{1,2})\.(\d{1,2})\.(\d{4})\/(\d{2})\:(\d{2})$', ident)
+        if m != None:
+            login = m.group(1)
+            DD = "%.2d"%int(m.group(2))
+            MM = "%.2d"%int(m.group(3))
+            YYYY = m.group(4)
+            H24 = m.group(5)
+            MI = m.group(6)
+            SEC = '00'
+            file_name = file_name.replace("[LOGIN]", login)
+            file_name = file_name.replace("[XC_NAME]", str(xc_details['pilot']['name']))
+            file_name = file_name.replace("[XC_CIVL]", str(xc_details['pilot']['idCivl']))
+            file_name = file_name.replace("[TYPE]", 'xcontest')
+        else:
+            raise MAIN_EXCEPTION(f'Incorrect format ident: {ident}')
+    if 'tg_details' in kwargs:
+        tg_details = kwargs['tg_details']
+        date_str = tg_details['date']
+        logging.debug(f'make_igc_file_name: date: "{date_str}"')
+        m = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})$', date_str)
+        if m != None:
+            DD = "%.2d"%int(m.group(3))
+            MM = "%.2d"%int(m.group(2))
+            YYYY = m.group(1)
+            file_name = file_name.replace("[TG_USERNAME]", str(tg_details['username']))
+            file_name = file_name.replace("[TYPE]", 'tg')
+        else:
+            raise MAIN_EXCEPTION(f'Incorrect format date: {date}')
 
-        if xlsx_user != None:
-            for field_name in xlsx_user:
-                file_name = file_name.replace(f"[XLSX-{field_name}]", str(xlsx_user[field_name]))
+    file_name = file_name.replace("[YYYY]", YYYY)
+    file_name = file_name.replace("[DD]", DD)
+    file_name = file_name.replace("[MM]", MM)
+    file_name = file_name.replace("[H24]", H24)
+    file_name = file_name.replace("[MI]", MI)
+    file_name = file_name.replace("[SEC]", SEC)
 
-        logging.info(f'track file name: "{file_name}"')
-        return file_name
+    if xlsx_user != None:
+        for field_name in xlsx_user:
+            file_name = file_name.replace(f"[XLSX-{field_name}]", str(xlsx_user[field_name]))
+
+    logging.info(f'track file name: "{file_name}"')
+    return file_name
+
+
+def test_make_igc_file_name():
+    global config
+    config.igc_file_name = '[XLSX-Name].[YYYY][MM][DD]-[H24][MI][SEC].[TYPE].[XLSX-Number].igc'
+    xlsx_user = {'Login': 'wind3style', 'tg_username': 'wind3style', 'Number': '124', 'Name': 'Alexander Fedorov'}
+    file_name = make_igc_file_name(xlsx_user, xc_details={'ident': 'wind3style/24.07.2023/05:52', 'pilot': {'name': 'Alexander Fedorov', 'idCivl':"4444"}})
+    logging.info(f'file_name: {file_name}')
+    if file_name == 'Alexander Fedorov.20230724-055200.xcontest.124.igc':
+        logging.info('Test - Success')
     else:
-        raise MAIN_EXCEPTION(f'Incorrect format ident: {ident}')
+        logging.info('Test - Failed')
+
+    file_name = make_igc_file_name(xlsx_user, tg_details={'username': 'wind3style', 'date': '2023-07-24'})
+    logging.info(f'file_name: {file_name}')
+    if file_name == 'Alexander Fedorov.20230724-000000.tg.124.igc':
+        logging.info('Test - Success')
+        return True
+    else:
+        logging.info('Test - Failed')
+        return False
 
 
 def XC_flights_fillter(src, date, country):
@@ -360,6 +457,14 @@ def read_attendence_list():
                 config.username_table = dict()
 
             config.username_table[login] = values
+
+                ### Telegram usernames
+            if 'tg_username' in values and values['tg_username'] != None:
+                if config.tg_username_table == None:
+                    config.tg_username_table = dict()
+
+                config.tg_username_table[login] = values
+
             row_num += 1
         except KeyError:
             break
@@ -387,4 +492,4 @@ def get_param(cParser, section, object_var_name, conf_obj, param_name, param_typ
             raise CONFIG_EXCEPTION("Error config: " + "[" + section +"]." + param_name +" MUST be defined")
 
 if __name__ == '__main__':
-    main()
+    main(sys.argv)
