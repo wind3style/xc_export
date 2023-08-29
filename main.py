@@ -8,7 +8,7 @@ import pandas as pd
 import configparser
 import time
 
-version = "v1.2.2"
+version = "v1.2.4"
 
 class MAIN_EXCEPTION(Exception):
     pass
@@ -149,7 +149,7 @@ def main(argv):
 
             ### Read telegram bot tracks
         if config.tg_bot_dir != None:
-            logging.debug(f'Read TG bot files')
+            logging.info(f'Read TG bot files')
             tg_bot_date_dir = os.path.join(config.tg_bot_dir, config.date)
             try:
                 tg_file_list = os.listdir(tg_bot_date_dir)
@@ -172,17 +172,22 @@ def main(argv):
                         logging.info(f'File name: {file_name} already loaded')
                         continue
 
-                    try:
-                        tg_bot_date_path_igc = os.path.join(tg_bot_date_dir, file_name)
-                        with open(tg_bot_date_path_igc, "r", encoding='utf8') as fin:
-                            igc_data = fin.read()
-                    except FileNotFoundError:
-                        logging.info(f'IGC file path {tg_bot_date_path_igc} wasn\'t find')
-
                     if tg_username in config.tg_username_table:
+                        if config.only_check == True:  ### skip downloading track
+                            continue
+
+                        try:
+                            tg_bot_date_path_igc = os.path.join(tg_bot_date_dir, file_name)
+                            with open(tg_bot_date_path_igc, "r", encoding='utf8') as fin:
+                                igc_data = fin.read()
+                        except FileNotFoundError:
+                            logging.info(f'IGC file path {tg_bot_date_path_igc} wasn\'t find')
+
                         xlsx_user = config.tg_username_table[tg_username]
                         tg_details = {'username': tg_username, 'date': date_str, 'file_name': file_name}
-                        igc_file_path = os.path.join(track_date_dir, make_igc_file_name(xlsx_user, tg_details=tg_details))
+                        igc_file_name = make_igc_file_name(xlsx_user, tg_details=tg_details)
+                        igc_file_path = os.path.join(track_date_dir, igc_file_name)
+
                             ### copy file
                         with open(igc_file_path, "w", encoding='utf8') as fout:
                             fout.write(igc_data)
@@ -192,6 +197,10 @@ def main(argv):
 
                         with open(tracks_loaded_file_path, "w", encoding='utf8') as fout:
                             json.dump(tracks_loaded, fout, indent=4, ensure_ascii=False)
+                            logging.info(f'Pilot tg_username: "{tg_username}" IGC track: "{igc_file_name}"')
+                    else:
+                        logging.info(f'Pilot tg_username: "{tg_username}", file_name: "{file_name}" wasn\'t found in attendence list')
+
 
 
     except MAIN_EXCEPTION as e:
