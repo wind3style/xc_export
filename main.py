@@ -8,7 +8,7 @@ import pandas as pd
 import configparser
 import time
 
-version = "v1.2.0"
+version = "v1.2.2"
 
 class MAIN_EXCEPTION(Exception):
     pass
@@ -155,6 +155,7 @@ def main(argv):
                 tg_file_list = os.listdir(tg_bot_date_dir)
             except FileNotFoundError as e:
                 logging.error(f'cannot find TG path: {tg_bot_date_dir}')
+                return
 
             for file_name in tg_file_list:
                 logging.debug(f'TG file "{file_name}"')
@@ -447,23 +448,22 @@ def read_attendence_list():
     row_num = 0
     while(True):
         try:
-            login = df['Login'][row_num]
             values = dict()
             for field_name in df:
                 values[field_name] = df[field_name][row_num]
-            logging.debug(f'Login: "{login}", fiend_values: ' + str(values))
-
-            if config.username_table == None:
-                config.username_table = dict()
-
-            config.username_table[login] = values
+            logging.debug(f'Field_values: ' + str(values))
 
                 ### Telegram usernames
-            if 'tg_username' in values and values['tg_username'] != None:
+            if 'Login' in values and type(values['Login']) == str:
+                if config.username_table == None:
+                    config.username_table = dict()
+                config.username_table[values['Login']] = values
+
+                ### Telegram usernames
+            if 'tg_username' in values and type(values['tg_username']) == str:
                 if config.tg_username_table == None:
                     config.tg_username_table = dict()
-
-                config.tg_username_table[login] = values
+                config.tg_username_table[values['tg_username']] = values
 
             row_num += 1
         except KeyError:
