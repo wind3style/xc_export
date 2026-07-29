@@ -8,7 +8,7 @@ import posixpath
 import pandas as pd
 import configparser
 
-version = "v1.4.0"
+version = "v1.4.1"
 
 class MAIN_EXCEPTION(Exception):
     pass
