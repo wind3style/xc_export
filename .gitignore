@@ -1,3 +1,4 @@
 xc_export.log
 dist/*
 build/*
+xc_cookie*.txt

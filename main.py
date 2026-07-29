@@ -6,9 +6,8 @@ import sys
 import os.path
 import pandas as pd
 import configparser
-import time
 
-version = "v1.2.4"
+version = "v1.3.0"
 
 class MAIN_EXCEPTION(Exception):
     pass
@@ -19,8 +18,7 @@ class CONFIG_EXCEPTION(Exception):
 class Config_account:
     def __init__(self, name):
         self.name = name
-        self.login = None
-        self.password=  None
+        self.cookie_file = None     ### path to a file with the browser "cookie" header
 
 
 class Config:
@@ -243,10 +241,9 @@ def read_config(file_name):
             if section.startswith('ACCOUNT:'):
                 account_name = section[8:]
                 conf_account = Config_account(account_name)
-                get_param(cParser, section, 'login', conf_account, 'login', str, True)
-                get_param(cParser, section, 'password', conf_account, 'password', str, True)
+                get_param(cParser, section, 'cookie_file', conf_account, 'cookie_file', str, True)
                 config.accounts.append(conf_account)
-                print('Add account login: %s'%(conf_account.login))
+                print('Add account "%s", cookie_file: %s' % (conf_account.name, conf_account.cookie_file))
 
     except Exception as e:
         logging.error(f'config error: ' + str(e))
@@ -361,6 +358,51 @@ def XC_flights_fillter(src, date, country):
     else:
         raise MAIN_EXCEPTION("Response parsing error")
 
+AUTH_CHECK_URL = 'https://www.xcontest.org/world/en/'
+    ### markers present only on an anonymous (not logged-in) page
+ANON_MARKERS = ('data-login-open', 'id="login-modal"', '::LogIN::')
+
+def _html_is_authenticated(html):
+    return not any(m in html for m in ANON_MARKERS)
+
+def is_session_authenticated(sess):
+    try:
+        resp = sess.get(AUTH_CHECK_URL)
+    except Exception as e:
+        logging.warning('Auth check request failed: %s' % (str(e)))
+        return False
+    if resp.status_code != 200:
+        logging.warning('Auth check returned HTTP %s' % (resp.status_code))
+        return False
+    return _html_is_authenticated(resp.text)
+
+def apply_cookies_to_session(sess, cookies):
+    for c in cookies:
+        sess.cookies.set(c['name'], c['value'], domain=c.get('domain', '.xcontest.org'), path=c.get('path', '/'))
+
+def parse_cookie_header(text, domain='.xcontest.org'):
+    ### Parses a raw "cookie" request-header string ("name=value; name2=value2; ...")
+    ### copied from the browser's DevTools into a list of cookie dicts.
+    text = text.strip()
+    if text.lower().startswith('cookie:'):
+        text = text[len('cookie:'):].strip()
+    cookies = []
+    for part in text.split(';'):
+        part = part.strip()
+        if not part or '=' not in part:
+            continue
+        name, value = part.split('=', 1)
+        name, value = name.strip(), value.strip()
+        if name:
+            cookies.append({'name': name, 'value': value, 'domain': domain, 'path': '/'})
+    return cookies
+
+def cookie_help(path):
+    return ('HOW TO GET IT: log in to https://www.xcontest.org in your normal browser, '
+            'open DevTools (F12) -> Network tab, click any request to www.xcontest.org, '
+            'find the request header "cookie", copy its whole value, and paste it into the '
+            'file "%s" (in the script folder). Re-copy it when the session expires.' % (path))
+
 def http_sess_init():
     global sess
 
@@ -385,9 +427,9 @@ def http_sess_init():
     sess.headers.update({'sec-ch-ua-mobile': '?0'})
     sess.headers.update({'sec-ch-ua-platform': '"Windows"'})
 
-        ### select account
+        ### select account (each account is a cookie file); rotate to the next one on rate-limit
     if len(config.accounts) == 0:
-        raise MAIN_EXCEPTION("No one account defined")
+        raise MAIN_EXCEPTION("No account defined (add at least one [ACCOUNT:*] with cookie_file)")
 
     if config.account_inx == None:
         config.account_inx = 0
@@ -395,22 +437,31 @@ def http_sess_init():
         config.account_inx += 1
 
     if config.account_inx >= len(config.accounts):
-        raise MAIN_EXCEPTION("Exceeded limit for all accounts")
+        raise MAIN_EXCEPTION("Exceeded all accounts — all cookie files are rate-limited or expired")
     else:
-        logging.info("Select account: inx: %d" % (config.account_inx))
+        logging.info("Select account: inx: %d ('%s')" % (config.account_inx, config.accounts[config.account_inx].name))
 
     conf_account = config.accounts[config.account_inx]
 
-    resp = sess.post('https://www.xcontest.org/world/en/', data={'login[username]': conf_account.login, 'login[password]': conf_account.password})
-    logging.debug('HTTP resp status code: %s, content: %s' % (resp.status_code, str(resp.content)))
-    if resp.status_code != 200:
-        raise MAIN_EXCEPTION("Incorrect HTTP status code: %s" % (resp.status_code))
-    content = resp.content.decode('utf-8')
-    if 'Username or password you have entered is not valid' in content:
-        logging.error('"Username or password you have entered is not valid"')
-        sys.exit(1)
+        ### Authenticate by reusing the session cookie from your normal browser (where the
+        ### Cloudflare Turnstile login was solved by a human). No automation/CDP is involved,
+        ### so anti-bot checks never see this script.
+    cookie_path = conf_account.cookie_file
+    if not os.path.isfile(cookie_path):
+        raise MAIN_EXCEPTION('Cookie file "%s" not found. %s' % (cookie_path, cookie_help(cookie_path)))
 
-    logging.info('Successful login: %s' % (conf_account.login))
+    with open(cookie_path, encoding='utf-8') as f:
+        cookies = parse_cookie_header(f.read())
+    if not cookies:
+        raise MAIN_EXCEPTION('No cookies parsed from "%s". %s' % (cookie_path, cookie_help(cookie_path)))
+    logging.info('Loaded %d cookies from "%s"' % (len(cookies), cookie_path))
+
+    apply_cookies_to_session(sess, cookies)
+    if not is_session_authenticated(sess):
+        raise MAIN_EXCEPTION('Cookies from "%s" are not a valid xcontest session (expired?). %s'
+                             % (cookie_path, cookie_help(cookie_path)))
+
+    logging.info('Successful login (account "%s", cookies from "%s")' % (conf_account.name, cookie_path))
 
 def http_req_get_json(url, **kwargs):
     try:
@@ -431,7 +482,9 @@ def http_req_get_binary(url, **kwargs):
         else:
             logging.warning(text_http_status)
 
-        if resp.status_code in [450, 429]:
+        if resp.status_code in [450, 429, 403]:
+                ### rate-limited (450/429) or session expired (403) -> rotate to the next account
+            logging.warning('HTTP %s — rotating to the next account/cookie' % (resp.status_code))
             http_sess_init()
 
             continue
