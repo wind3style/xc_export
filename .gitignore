@@ -1,4 +1,7 @@
-xc_export.log
+.venv/
+__pycache__/
+*.log
 dist/*
 build/*
 xc_cookie*.txt
+~$*.xlsx

@@ -4,10 +4,11 @@ import re
 import json
 import sys
 import os.path
+import posixpath
 import pandas as pd
 import configparser
 
-version = "v1.3.0"
+version = "v1.4.0"
 
 class MAIN_EXCEPTION(Exception):
     pass
@@ -43,9 +44,64 @@ class Config:
         self.xc_max_flights = 1000
         self.only_check=False
         self.tg_bot_dir=None
+        self.tg_bot_mode = 'local'   ### 'local' | 'ssh'
+        self.ssh_host = None
+        self.ssh_port = 22
+        self.ssh_username = None
+        self.ssh_password = None
 
 config = Config()
 sess = None
+
+class LocalFS:
+    def join(self, *parts):
+        return os.path.join(*parts)
+
+    def listdir(self, path):
+        return os.listdir(path)
+
+    def read_text(self, path):
+        with open(path, 'r', encoding='utf8') as fin:
+            return fin.read()
+
+    def close(self):
+        pass
+
+class SftpFS:
+    ### reads files from a remote server over SFTP (replaces an sshfs mount)
+    def __init__(self, host, port, username, password):
+        import paramiko
+        self._client = paramiko.SSHClient()
+        self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        self._client.connect(hostname=host, port=port, username=username, password=password,
+                             look_for_keys=False, allow_agent=False, timeout=30)
+        self._sftp = self._client.open_sftp()
+        logging.info('SFTP connected: %s@%s:%d' % (username, host, port))
+
+    def join(self, *parts):
+        return posixpath.join(*parts)   ### remote server is POSIX -> forward slashes
+
+    def listdir(self, path):
+        return self._sftp.listdir(path)
+
+    def read_text(self, path):
+        with self._sftp.open(path, 'r') as fin:
+            return fin.read().decode('utf-8')
+
+    def close(self):
+        try:
+            self._sftp.close()
+        except Exception:
+            pass
+        try:
+            self._client.close()
+        except Exception:
+            pass
+
+def make_tg_fs():
+    if config.tg_bot_mode == 'ssh':
+        return SftpFS(config.ssh_host, config.ssh_port, config.ssh_username, config.ssh_password)
+    return LocalFS()
 
 def main(argv):
     global sess
@@ -147,12 +203,14 @@ def main(argv):
 
             ### Read telegram bot tracks
         if config.tg_bot_dir != None:
-            logging.info(f'Read TG bot files')
-            tg_bot_date_dir = os.path.join(config.tg_bot_dir, config.date)
+            logging.info(f'Read TG bot files (mode: {config.tg_bot_mode})')
+            fs = make_tg_fs()
+            tg_bot_date_dir = fs.join(config.tg_bot_dir, config.date)
             try:
-                tg_file_list = os.listdir(tg_bot_date_dir)
-            except FileNotFoundError as e:
+                tg_file_list = fs.listdir(tg_bot_date_dir)
+            except (FileNotFoundError, IOError) as e:
                 logging.error(f'cannot find TG path: {tg_bot_date_dir}')
+                fs.close()
                 return
 
             for file_name in tg_file_list:
@@ -175,10 +233,9 @@ def main(argv):
                             continue
 
                         try:
-                            tg_bot_date_path_igc = os.path.join(tg_bot_date_dir, file_name)
-                            with open(tg_bot_date_path_igc, "r", encoding='utf8') as fin:
-                                igc_data = fin.read()
-                        except FileNotFoundError:
+                            tg_bot_date_path_igc = fs.join(tg_bot_date_dir, file_name)
+                            igc_data = fs.read_text(tg_bot_date_path_igc)
+                        except (FileNotFoundError, IOError):
                             logging.info(f'IGC file path {tg_bot_date_path_igc} wasn\'t find')
 
                         xlsx_user = config.tg_username_table[tg_username]
@@ -199,7 +256,7 @@ def main(argv):
                     else:
                         logging.info(f'Pilot tg_username: "{tg_username}", file_name: "{file_name}" wasn\'t found in attendence list')
 
-
+            fs.close()
 
     except MAIN_EXCEPTION as e:
         logging.error(f'main error: ' + str(e))
@@ -233,9 +290,19 @@ def read_config(file_name):
         get_param(cParser, 'MAIN', 'xc_max_flights', config, 'xc_max_flights', int, False)
         get_param(cParser, 'MAIN', 'only_check', config, 'only_check', bool, False)
         get_param(cParser, 'MAIN', 'tg_bot_dir', config, 'tg_bot_dir', str, False)
+        get_param(cParser, 'MAIN', 'tg_bot_mode', config, 'tg_bot_mode', str, False)
 
         if config.log_level not in ['DEBUG', 'INFO', 'ERROR']:
             raise MAIN_EXCEPTION('Incorrect log_level value: "%s"'%(config.log_level))
+
+        if config.tg_bot_mode not in ['local', 'ssh']:
+            raise MAIN_EXCEPTION('Incorrect tg_bot_mode value: "%s" (use "local" or "ssh")'%(config.tg_bot_mode))
+
+        if config.tg_bot_mode == 'ssh':
+            get_param(cParser, 'SSH', 'ssh_host', config, 'host', str, True)
+            get_param(cParser, 'SSH', 'ssh_port', config, 'port', int, False)
+            get_param(cParser, 'SSH', 'ssh_username', config, 'username', str, True)
+            get_param(cParser, 'SSH', 'ssh_password', config, 'password', str, True)
 
         for section in cParser.sections():
             if section.startswith('ACCOUNT:'):
