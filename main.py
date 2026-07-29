@@ -8,7 +8,8 @@ import posixpath
 import pandas as pd
 import configparser
 
-version = "v1.4.1"
+version = "v1.4.2"
+copyright = "(C) 2026 Alexander Fedorov <wind3style@gmail.com>"
 
 class MAIN_EXCEPTION(Exception):
     pass
@@ -126,6 +127,7 @@ def main(argv):
 
         logging.basicConfig(**log_args)
         logging.info('XCTrack fly log exporter, version: %s'%(version))
+        logging.info(copyright)
 
         read_attendence_list()
 
