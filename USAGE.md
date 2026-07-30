@@ -86,6 +86,24 @@ A normal Excel sheet with one row per pilot. Column **names** matter (case-sensi
 Every column becomes available in the output file name as `[XLSX-<ColumnName>]`
 (e.g. `[XLSX-Name]`, `[XLSX-Number]`, `[XLSX-Login]`).
 
+### Alternative: FSDB (FScomp) instead of the .xlsx
+
+Instead of `attendence_list_file` you can point to an **FSDB** file from FScomp with the
+`fsdb` setting. The pilot's xcontest username is read from a per-participant custom field
+named **`xcontest login`** (configurable via `xcontest_login_field_name`). The participant's
+`id` is used as the number and `name` as the name (so the same `[XLSX-Number]` / `[XLSX-Name]`
+file-name tokens work).
+
+Preparing the FSDB (one time):
+
+1. Set `fsdb=<path>` and `fsdb_update=true`, then run once. The tool adds an empty
+   `xcontest login` field to every participant that doesn't have one, and saves the file.
+2. Open the FSDB in FScomp and fill each pilot's **xcontest login**. Save.
+3. Set `fsdb_update=false` and run normally — matched pilots' tracks are downloaded.
+
+Notes: `fsdb` takes precedence over `attendence_list_file` if both are set. Telegram-bot
+matching (§8) needs the `.xlsx` `tg_username` column and is not available from FSDB.
+
 ---
 
 ## 6. Configuration — `xc_export_conf.ini`
@@ -100,6 +118,9 @@ Every column becomes available in the output file name as `[XLSX-<ColumnName>]`
 | `country` | no | Country filter, e.g. `KZ`. Omit to include all. |
 | `track_dir` | yes | Base output folder for saved tracks. |
 | `attendence_list_file` | no | Path to the attendance `.xlsx`. |
+| `fsdb` | no | Path to an FSDB (FScomp) file — alternative to the `.xlsx` (see §5). |
+| `fsdb_update` | no | `true` = add the empty `xcontest login` field to participants missing it, then save the FSDB. Default `false`. |
+| `xcontest_login_field_name` | no | FSDB custom-field name holding the xcontest login. Default `xcontest login`. |
 | `igc_file_name` | yes | Output file-name template (see tokens below). |
 | `tracks_loaded_file_name` | no | Progress file, default `tracks_loaded.json`. |
 | `xc_max_flights` | no | Max flights to request per day, default `1000`. |

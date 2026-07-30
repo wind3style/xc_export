@@ -7,8 +7,9 @@ import os.path
 import posixpath
 import pandas as pd
 import configparser
+import xml.etree.ElementTree as ET
 
-version = "v1.4.2"
+version = "v1.5.0"
 copyright = "(C) 2026 Alexander Fedorov <wind3style@gmail.com>"
 
 class MAIN_EXCEPTION(Exception):
@@ -39,6 +40,9 @@ class Config:
         self.account_inx = None
         self.track_dir = None
         self.attendence_list_file = None
+        self.fsdb = None                              ### alternative to attendence_list_file (FScomp)
+        self.fsdb_update = False                      ### add empty xcontest-login field where missing
+        self.xcontest_login_field_name = 'xcontest login'
         self.log_file = None
         self.tracks_loaded_file_name = "tracks_loaded.json"
         self.igc_file_name = None
@@ -129,7 +133,12 @@ def main(argv):
         logging.info('XCTrack fly log exporter, version: %s'%(version))
         logging.info(copyright)
 
-        read_attendence_list()
+        if config.fsdb != None:
+            if config.attendence_list_file != None:
+                logging.warning('Both fsdb and attendence_list_file set - using fsdb')
+            read_fsdb_list()
+        else:
+            read_attendence_list()
 
         http_sess_init()
 
@@ -230,7 +239,7 @@ def main(argv):
                         logging.info(f'File name: {file_name} already loaded')
                         continue
 
-                    if tg_username in config.tg_username_table:
+                    if config.tg_username_table != None and tg_username in config.tg_username_table:
                         if config.only_check == True:  ### skip downloading track
                             continue
 
@@ -283,6 +292,9 @@ def read_config(file_name):
         get_param(cParser, 'MAIN', 'lng', config, 'lng', str, False)
         get_param(cParser, 'MAIN', 'track_dir', config, 'track_dir', str, True)
         get_param(cParser, 'MAIN', 'attendence_list_file', config, 'attendence_list_file', str, False)
+        get_param(cParser, 'MAIN', 'fsdb', config, 'fsdb', str, False)
+        get_param(cParser, 'MAIN', 'fsdb_update', config, 'fsdb_update', bool, False)
+        get_param(cParser, 'MAIN', 'xcontest_login_field_name', config, 'xcontest_login_field_name', str, False)
 
         get_param(cParser, 'MAIN', 'log_file', config, 'log_file', str, False)
         get_param(cParser, 'MAIN', 'tracks_loaded_file_name', config, 'tracks_loaded_file_name', str, False)
@@ -565,6 +577,67 @@ def http_req_get_binary(url, **kwargs):
 
     raise MAIN_EXCEPTION("Excceed max time attempts")
 
+def read_fsdb_list():
+    global config
+
+    if config.fsdb == None:
+        return
+
+    login_field = config.xcontest_login_field_name
+    try:
+        tree = ET.parse(config.fsdb)
+    except Exception as e:
+        raise MAIN_EXCEPTION('Cannot read fsdb "%s": %s' % (config.fsdb, str(e)))
+    root = tree.getroot()
+    participants = root.findall('.//FsParticipant')
+    logging.info('FSDB "%s": %d participants (login field: "%s")'
+                 % (config.fsdb, len(participants), login_field))
+
+        ### a configured source ALWAYS yields a table (possibly empty) so unmatched
+        ### pilots are skipped; only a completely unset source means "download all"
+    config.username_table = dict()
+    added = 0
+    for p in participants:
+        ca_parent = p.find('FsCustomAttributes')
+        custom = dict()
+        if ca_parent is not None:
+            for ca in ca_parent.findall('FsCustomAttribute'):
+                custom[ca.get('name')] = ca.get('value')
+
+        if login_field not in custom:
+            if config.fsdb_update:
+                if ca_parent is None:
+                    ca_parent = ET.SubElement(p, 'FsCustomAttributes')
+                ET.SubElement(ca_parent, 'FsCustomAttribute', {'name': login_field, 'value': ''})
+                custom[login_field] = ''
+                added += 1
+
+        login = (custom.get(login_field) or '').strip()
+
+            ### values usable as [XLSX-<field>] tokens in make_igc_file_name
+        values = dict(p.attrib)
+        values.update(custom)
+        values['Number'] = p.get('id')
+        values['Name'] = p.get('name')
+        values['Login'] = login
+        logging.debug('FSDB participant: ' + str(values))
+
+        if login != '':
+            config.username_table[login] = values
+
+    if config.fsdb_update and added > 0:
+        ET.indent(tree, space='    ')
+        tree.write(config.fsdb, encoding='utf-8', xml_declaration=True)
+        logging.info('FSDB updated: added empty "%s" to %d participant(s) in "%s"'
+                     % (login_field, added, config.fsdb))
+
+    matched = len(config.username_table)
+    logging.info('FSDB: %d participant(s) with non-empty "%s"' % (matched, login_field))
+    if matched == 0:
+        logging.warning('No participants have a non-empty "%s" - nothing will be downloaded. '
+                        'Fill the logins in FScomp (or run once with fsdb_update=true to add the field).'
+                        % (login_field))
+
 def read_attendence_list():
     global config
 
@@ -576,6 +649,9 @@ def read_attendence_list():
         engine='openpyxl'
     )
     logging.info("Attendence list:\n" + str(df))
+        ### a configured source ALWAYS yields a table (possibly empty) so unmatched
+        ### pilots are skipped; only a completely unset source means "download all"
+    config.username_table = dict()
     row_num = 0
     while(True):
         try:
@@ -586,8 +662,6 @@ def read_attendence_list():
 
                 ### Telegram usernames
             if 'Login' in values and type(values['Login']) == str:
-                if config.username_table == None:
-                    config.username_table = dict()
                 config.username_table[values['Login']] = values
 
                 ### Telegram usernames
